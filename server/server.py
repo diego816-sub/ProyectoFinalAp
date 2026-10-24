@@ -100,6 +100,9 @@ def initialize():
           next_try REAL NOT NULL DEFAULT 0);
         ''')
 
+        client_columns = {r['name'] for r in db.execute('PRAGMA table_info(clients)')}
+        if 'reference' not in client_columns:
+            db.execute("ALTER TABLE clients ADD COLUMN reference TEXT NOT NULL DEFAULT ''")
         visit_features.migrate(db)
         journeys.migrate(db)
 
@@ -171,7 +174,7 @@ def get_visit(db, uid, user):
 def snapshot(db, user):
     clause = '' if user['role'] == 'coordinator' else ' WHERE v.technician_id=?'
     params = () if not clause else (user['id'],)
-    visits = [dict(r) for r in db.execute('''SELECT v.*, c.name client_name, c.address,
+    visits = [dict(r) for r in db.execute('''SELECT v.*, c.name client_name, c.address, c.reference,
         c.latitude, c.longitude, u.name technician_name,
         EXISTS(SELECT 1 FROM routes r WHERE r.visit_id=v.id) has_route,
         COALESCE((SELECT status FROM mail_outbox m WHERE m.visit_id=v.id), 'not_requested') mail_status
@@ -308,10 +311,10 @@ def mail_worker():
 
 
 def assignment_message(db, uid):
-    v = db.execute('SELECT v.*, c.name AS client_name, c.address, c.latitude, c.longitude FROM visits v JOIN clients c ON c.id=v.client_id WHERE v.id=?', (uid,)).fetchone()
+    v = db.execute('SELECT v.*, c.name AS client_name, c.address, c.reference, c.latitude, c.longitude FROM visits v JOIN clients c ON c.id=v.client_id WHERE v.id=?', (uid,)).fetchone()
     return (f"Visita asignada: {v['client_name']}\n"
             f"Fecha: {v['scheduled_date']} {v['scheduled_time']}\n"
-            f"Dirección: {v['address']}\nTrabajo: {v['task']}\n"
+            f"Calle: {v['address']}\nReferencia: {v['reference']}\nTrabajo: {v['task']}\n"
             f"Cómo llegar: https://www.google.com/maps/dir/?api=1&destination={v['latitude']},{v['longitude']}\n"
             "Abre NexoVisita y pulsa Actualizar. Desde la visita puedes compartir tu traslado y adjuntar evidencias.")
 
@@ -319,7 +322,7 @@ def assignment_message(db, uid):
 def dispatch(method, path, data, token):
     # Liveness must not wait behind photo uploads or email delivery transactions.
     if method == 'GET' and path == '/health':
-        return {'app': 'NexoVisita', 'api': 4, 'version': '1.10'}
+        return {'app': 'NexoVisita', 'api': 5, 'version': '1.11'}
     with connect() as db:
         if method == 'POST' and path in ('/activate/request', '/password/request'):
             return request_code(db, data, 'activate' if path.startswith('/activate') else 'reset')
@@ -370,8 +373,10 @@ def dispatch(method, path, data, token):
         if method == 'POST' and path == '/clients':
             coordinator(user)
             uid = secrets.token_hex(16)
-            db.execute('INSERT INTO clients VALUES (?,?,?,?,?)', (uid, text(data, 'name', 100),
-                text(data, 'address', 240), number(data, 'latitude', -90, 90), number(data, 'longitude', -180, 180)))
+            db.execute('INSERT INTO clients (id,name,address,latitude,longitude,reference) VALUES (?,?,?,?,?,?)',
+                (uid, text(data, 'name', 100), text(data, 'street' if 'street' in data else 'address', 240),
+                 number(data, 'latitude', -90, 90), number(data, 'longitude', -180, 180),
+                 text(data, 'reference', 240, 0) if 'reference' in data else ''))
             return {'id': uid}
         if method == 'POST' and path == '/visits':
             coordinator(user)

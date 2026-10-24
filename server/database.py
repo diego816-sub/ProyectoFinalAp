@@ -59,7 +59,7 @@ class Connection:
                 c.execute(translate(sql), params)
                 return Result(c)
         except pymysql.IntegrityError as e:
-            raise sqlite3.IntegrityError('Restricción de integridad MySQL.') from e
+            raise sqlite3.IntegrityError('RestricciÃ³n de integridad MySQL.') from e
     def commit(self): self.raw.commit()
     def rollback(self): self.raw.rollback()
 
@@ -82,7 +82,7 @@ def connect():
         with raw.cursor() as c:
             c.execute('SELECT GET_LOCK(%s, 60) AS acquired', (name,))
             if c.fetchone()['acquired'] != 1:
-                raise RuntimeError('Servidor ocupado. Reintenta la operación.')
+                raise RuntimeError('Servidor ocupado. Reintenta la operaciÃ³n.')
         raw.begin()
         yield Connection(raw)
         raw.commit()
@@ -98,3 +98,8 @@ def initialize():
     with connect() as db:
         for statement in Path(__file__).with_name('schema_mysql.sql').read_text().split(';'):
             if statement.strip(): db.execute(statement)
+
+        columns = {r['COLUMN_NAME'] for r in db.execute(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='clients'")}
+        if 'reference' not in columns:
+            db.execute("ALTER TABLE clients ADD COLUMN reference VARCHAR(240) NOT NULL DEFAULT ''")
